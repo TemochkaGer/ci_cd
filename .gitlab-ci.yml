@@ -1,0 +1,19 @@
+# Цель: написать полноценный pipeline
+# $DOCKER_REGISTRY=git.rs-app.ru:5050
+# $DOCKER_REGISTRY_PASSWORD - Создать в gitlab TOKEN
+# $DOCKER_REGISTRY_USER - создается вместе с токеном
+
+stages:
+  - deploy_dev
+
+.scripts:
+  docker login: echo $DOCKER_REGISTRY_PASSWORD | docker login -u $DOCKER_REGISTRY_USER $DOCKER_REGISTRY --password-stdin
+
+variables:
+  BACK_IMAGE: $DOCKER_REGISTRY/$CI_PROJECT_PATH/backend:${CI_COMMIT_BRANCH}
+  FRONT_IMAGE: $DOCKER_REGISTRY/$CI_PROJECT_PATH/frontend:${CI_COMMIT_BRANCH}
+
+build_back:
+  image: docker:latest
+  
+
