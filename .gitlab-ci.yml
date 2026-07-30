@@ -83,7 +83,7 @@ push_dev:
     - !reference [.scripts, docker_login]
     - !reference [.scripts, clone_env]
     - docker compose -f ./deploy/prod/docker-compose.yml pull api web
-    - docker compose -f ./deploy/prod/docker-compose.yml up -d api web --recreate
+    - docker compose -f ./deploy/prod/docker-compose.yml up -d --force-recreate api web 
   needs:
     - build_api
     - build_web
@@ -97,7 +97,7 @@ push_dev:
 app_install:
   stage: deploy
   script:
-  - !referebce [.scripts, clone_env]
+  - !reference [.scripts, clone_env]
   - |
     echo "Применяем миграции Prisma к внешней базе данных..."
     docker compose -f ./deploy/prod/docker-compose.yml run --rm --no-deps --entrypoint sh \
@@ -120,10 +120,7 @@ app_install:
 app_start:
   stage: deploy
   script:
-    - !reference [.scripts, docker_login]
     - !reference [.scripts, clone_env]
-    - docker compose -f ./deploy/prod/docker-compose.yml pull api web
-    - docker compose -f ./deploy/prod/docker-compose.yml up -d api web
     - docker compose -f ./deploy/prod/docker-compose.yml run --rm api node dist/cli/bootstrap.js || echo "Bootstrap уже выполнен"
   needs:
     - app_install
