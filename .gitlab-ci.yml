@@ -4,26 +4,26 @@ stages:
   - deploy
 
 .scripts:
-  docker_login: echo $CI_REGISTRY_PASSWORD | docker login -u $CI_REGISTRY_USERNAME $CI_REGISTRY --password-stdin
+  docker_login: echo $CI_REGISTRY_PASSWORD | docker login -u $CI_REGISTRY_USER $CI_REGISTRY --password-stdin
   clone_env: |
     git clone --no-checkout --depth 1 https://$SECRETS_USER:$SECRETS_TOKEN@$SECRETS_URL secrets_tmp 
-    cd ./secrets_api_tmp && git show HEAD:.env > ../deploy/prod/.env && cd .. && rm -rf ./secrets_tmp
+    cd ./secrets_tmp && git show HEAD:.env > ../deploy/prod/.env && cd .. && rm -rf ./secrets_tmp
 
 variables:
-  API_IMAGE: $CI_REGISTRY/$CI_PROJECKTS_PATH/api:{$CI_COMMIT_BRANCH}
-  WEB_IMAGE: $CI_REGISTRY/$CI_PROJECKTS_PATH/web:{$CI_COMMIT_BRANCH}
+  API_IMAGE: $CI_REGISTRY/$CI_PROJECT_PATH/api:${CI_COMMIT_BRANCH}
+  WEB_IMAGE: $CI_REGISTRY/$CI_PROJECT_PATH/web:${CI_COMMIT_BRANCH}
 
 test_gate:
   stage: test
   image: node:22-alpine
   cache:
-    keys:
+    key:
       files:
         - ./package-lock.json
     paths:
-      - ./package.json
+      - ./.npm-cache
   script:
-    - npm cli cache ./.npm-cache --prefer-offline
+    - npm ci --cache ./.npm-cache --prefer-offline
     - npm run -w @sozh/api prisma:generate
     - npm run build
     - npm run test
@@ -43,11 +43,11 @@ build_api:
   services:
     - name: docker:24.0
       alias: docker
-      command: [--tls=false]
+      command: ["--tls=false"]
   script:
     - !reference [.scripts, docker_login]
     - docker pull $API_IMAGE || true
-    - docker build -t $API_IMAGE -f ./deploy/prod/api.Docker .
+    - docker build -t $API_IMAGE -f ./deploy/prod/api.Dockerfile .
     - docker push $API_IMAGE
   only:
     refs:
@@ -65,7 +65,7 @@ build_web:
   services:
     - name: docker:24.0
       alias: docker
-      command: [--tls=false]
+      command: ["--tls=false"]
   script:
     - !reference [.scripts, docker_login]
     - docker pull $WEB_IMAGE || true
@@ -81,9 +81,9 @@ push_dev:
   stage: deploy
   script:
     - !reference [.scripts, docker_login]
-    - !reference [scripts, clone_env]
-    - docker compose pull -f ./deploy/prod/docker-compose.yml api web
-    - docker compose up -d -f ./deploy/prod/docker-compose.yml api web --recreate
+    - !reference [.scripts, clone_env]
+    - docker compose -f ./deploy/prod/docker-compose.yml pull api web
+    - docker compose -f ./deploy/prod/docker-compose.yml up -d api web --recreate
   needs:
     - build_api
     - build_web
@@ -97,6 +97,7 @@ push_dev:
 app_install:
   stage: deploy
   script:
+  - !referebce [.scripts, clone_env]
   - |
     echo "Применяем миграции Prisma к внешней базе данных..."
     docker compose -f ./deploy/prod/docker-compose.yml run --rm --no-deps --entrypoint sh \
@@ -120,12 +121,12 @@ app_start:
   stage: deploy
   script:
     - !reference [.scripts, docker_login]
-    - !reference [.scripst, clone_env]
-    - docker compose pull -f ./deploy/prod/docker-compose.yml api web
-    - docker compose up -d -f ./deploy/prod/docker-compose.yml api web
-    - docker compose run -f ./deploy/prod/docker-compose.yml --rm api node dist/cli/bootstrap.js || echo "Bootstrap уже выполнен"
+    - !reference [.scripts, clone_env]
+    - docker compose -f ./deploy/prod/docker-compose.yml pull api web
+    - docker compose -f ./deploy/prod/docker-compose.yml up -d api web
+    - docker compose -f ./deploy/prod/docker-compose.yml run --rm api node dist/cli/bootstrap.js || echo "Bootstrap уже выполнен"
   needs:
-    - app_install_dev
+    - app_install
   when: on_success
   only:
     refs:
