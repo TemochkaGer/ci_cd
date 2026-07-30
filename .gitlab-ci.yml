@@ -1,19 +1,148 @@
-# Цель: написать полноценный pipeline
-# $DOCKER_REGISTRY=git.rs-app.ru:5050
-# $DOCKER_REGISTRY_PASSWORD - Создать в gitlab TOKEN
-# $DOCKER_REGISTRY_USER - создается вместе с токеном
-
 stages:
-  - deploy_dev
+  - test
+  - build
+  - deploy
 
 .scripts:
-  docker login: echo $DOCKER_REGISTRY_PASSWORD | docker login -u $DOCKER_REGISTRY_USER $DOCKER_REGISTRY --password-stdin
+  docker_login: echo $CI_REGISTRY_PASSWORD | docker login -u $CI_REGISTRY_USERNAME $CI_REGISTRY --password-stdin
+  clone_env: |
+    git clone --no-checkout --depth 1 https://$SECRETS_USER:$SECRETS_TOKEN@$SECRETS_URL secrets_tmp 
+    cd ./secrets_api_tmp && git show HEAD:.env > ../deploy/prod/.env && cd .. && rm -rf ./secrets_tmp
 
 variables:
-  BACK_IMAGE: $DOCKER_REGISTRY/$CI_PROJECT_PATH/backend:${CI_COMMIT_BRANCH}
-  FRONT_IMAGE: $DOCKER_REGISTRY/$CI_PROJECT_PATH/frontend:${CI_COMMIT_BRANCH}
+  API_IMAGE: $CI_REGISTRY/$CI_PROJECKTS_PATH/api:{$CI_COMMIT_BRANCH}
+  WEB_IMAGE: $CI_REGISTRY/$CI_PROJECKTS_PATH/web:{$CI_COMMIT_BRANCH}
 
-build_back:
-  image: docker:latest
-  
+test_gate:
+  stage: test
+  image: node:22-alpine
+  cache:
+    keys:
+      files:
+        - ./package-lock.json
+    paths:
+      - ./package.json
+  script:
+    - npm cli cache ./.npm-cache --prefer-offline
+    - npm run -w @sozh/api prisma:generate
+    - npm run build
+    - npm run test
+  only:
+    refs:
+      - dev
+  tags:
+    - gitlab-docker
 
+build_api:
+  image: docker:24.0
+  stage: build
+  variables:
+    DOCKER_HOST: tcp://docker:2375
+    DOCKER_DRIVER: overlay2
+    DOCKER_TLS_CERTDIR: ""
+  services:
+    - name: docker:24.0
+      alias: docker
+      command: [--tls=false]
+  script:
+    - !reference [.scripts, docker_login]
+    - docker pull $API_IMAGE || true
+    - docker build -t $API_IMAGE -f ./deploy/prod/api.Docker .
+    - docker push $API_IMAGE
+  only:
+    refs:
+      - dev
+  tags:
+    - gitlab-docker
+
+build_web:
+  image: docker:24.0
+  stage: build
+  variables:
+    DOCKER_HOST: tcp://docker:2375
+    DOCKER_DRIVER: overlay2
+    DOCKER_TLS_CERTDIR: ""
+  services:
+    - name: docker:24.0
+      alias: docker
+      command: [--tls=false]
+  script:
+    - !reference [.scripts, docker_login]
+    - docker pull $WEB_IMAGE || true
+    - docker build -t $WEB_IMAGE -f ./deploy/prod/web.Dockerfile .
+    - docker push $WEB_IMAGE
+  only:
+    refs:
+      - dev
+  tags:
+    - gitlab-docker
+
+push_dev:
+  stage: deploy
+  script:
+    - !reference [.scripts, docker_login]
+    - !reference [scripts, clone_env]
+    - docker compose pull -f ./deploy/prod/docker-compose.yml api web
+    - docker compose up -d -f ./deploy/prod/docker-compose.yml api web --recreate
+  needs:
+    - build_api
+    - build_web
+  when: on_success
+  only:
+    refs:
+      - dev
+  tags:
+    - sozh-dev
+
+app_install:
+  stage: deploy
+  script:
+  - |
+    echo "Применяем миграции Prisma к внешней базе данных..."
+    docker compose -f ./deploy/prod/docker-compose.yml run --rm --no-deps --entrypoint sh \
+      api -c "cd /app/apps/api && npx prisma migrate deploy" || echo "Миграции уже применены или не требуются"
+  - |
+    echo "Выполняем seed (если есть новые данные)..."
+    docker compose -f ./deploy/prod/docker-compose.yml run --rm --no-deps --entrypoint sh \
+      api -c "cd /app/apps/api && npm run seed" || echo "Seed не выполнен или не требуется"
+
+  needs:
+    - build_api
+    - push_dev
+  when: on_success
+  tags:
+    - sozh-dev
+  only:
+    refs:
+      - dev
+
+app_start:
+  stage: deploy
+  script:
+    - !reference [.scripts, docker_login]
+    - !reference [.scripst, clone_env]
+    - docker compose pull -f ./deploy/prod/docker-compose.yml api web
+    - docker compose up -d -f ./deploy/prod/docker-compose.yml api web
+    - docker compose run -f ./deploy/prod/docker-compose.yml --rm api node dist/cli/bootstrap.js || echo "Bootstrap уже выполнен"
+  needs:
+    - app_install_dev
+  when: on_success
+  only:
+    refs:
+      - dev
+  tags:
+    - sozh-dev
+
+clean_up:
+  stage: deploy
+  script:
+    - docker image prune --force
+    - docker builder prune --force
+  needs:
+    - app_start
+  when: on_success
+  only:
+    refs:
+      - dev
+  tags:
+    - sozh-dev
